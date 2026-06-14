@@ -1,4 +1,4 @@
-# Text2SQL
+# MSGE-SQL (Multi-Strategy Generation and Evaluation for SQL)
 
 ![Multi-agent architecture](assets/text2sql_agent.png)
 
