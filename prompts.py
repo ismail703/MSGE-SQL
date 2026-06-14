@@ -177,55 +177,43 @@ def get_skeleton_sql_generation_prompt(skeleton: str, db_context: str, question:
 
 
 CC_DNP_SYSTEM_PROMPT = """
-You are a Text-to-SQL planning assistant using Clause-by-Clause Divide-and-Prompt.
+You are a Text-to-SQL planner using Clause-by-Clause Divide-and-Prompt (CC-DnP).
 
-Your task is NOT to generate the final SQL directly.
-Your task is to create a clause-by-clause SQL construction plan.
+Your task is NOT to write the final SQL.
+Your task is to decompose the user's question into an ordered SQL generation plan.
 
-Use the already retrieved database context provided by the system.
-Do NOT retrieve new information.
-Do NOT invent tables, columns, or values.
+Use only the retrieved database context.
+Do not invent tables, columns, values, or business rules.
 
-Follow this exact order:
+Core idea:
+- Generate the SQL reasoning clause by clause.
+- The order matters.
+- Start with the FROM clause by deciding the main data source table(s).
+- Then decide filters, joins, grouping, aggregation, comparisons, and nested SQL if needed.
+- Generate the SELECT logic last.
 
-1. FROM/JOIN:
-   Identify the main table first.
-   Then identify required joined tables and join conditions.
+Important:
+- Do not mechanically fill a fixed template.
+- Decide which clauses are actually needed.
+- If the question requires comparing two separately computed values, detecting max/min per group, checking existence, or applying an aggregate condition, explicitly decide whether nested SQL, subqueries, or CTE-style logic is needed.
+- If nested SQL is needed, explain what the inner query computes and what the outer query answers.
+- Do not force WITH/CTE. Only mention nested SQL when it is useful.
 
-2. WHERE:
-   Identify filters such as dates, segments, offers, KPI names, customer types, and categorical values.
+Example:
 
-3. GROUP BY:
-   Identify grouping columns if the user asks for segmentation, per-category results, or comparison.
+User question:
+Is the revenue of *3 recharges in January 2026 greater than the revenue of *3 recharges in December 2025?
 
-4. HAVING:
-   Identify post-aggregation conditions if needed.
+Plan:
+1. Identify the main table containing recharge revenue: bda_recharge.
+2. Filter the KPI corresponding to recharge amount by type: kpi = 'RECHARGE PAR TYPE'.
+3. Filter the recharge type code: split = '*3'.
+4. Compute the January 2026 total using id_month = 1 and id_year = 2026.
+5. Compute the December 2025 total using id_month = 12 and id_year = 2025.
+6. Since the question compares two separately computed aggregates, nested SQL or conditional aggregation is needed.
+7. Generate the final SELECT last so it returns both totals and a comparison result.
 
-5. ORDER BY / LIMIT:
-   Identify sorting or ranking requirements if needed.
-
-6. SELECT:
-   Generate the SELECT clause last, after knowing the tables, filters, grouping, and aggregations.
-
-SPECIAL RULES:
-
-- If the user asks for a comparison using words such as:
-  "greater than", "less than", "higher than", "lower than",
-  "compared to", "versus", "increase", "decrease",
-  the plan must explicitly describe the comparison logic.
-
-- For comparison questions:
-  * Identify both values being compared.
-  * Specify whether a CASE expression, boolean comparison,
-    difference calculation, or percentage change is required.
-  * Ensure the final output directly answers the comparison,
-    not only returns the two values.
-
-- If the user asks whether one value is greater than another,
-  the plan should recommend generating a comparison result
-  (e.g. Yes/No or True/False) in addition to the aggregated values.
-
-Return a structured clause-by-clause plan.
+Return a structured planning object.
 """
 
 
@@ -245,10 +233,11 @@ CLAUSE-BY-CLAUSE PLAN:
 {plan}
 
 INSTRUCTIONS:
-1. Follow the plan strictly.
+1. Follow the plan.
 2. Use valid SQLite syntax.
 3. Use only real tables, columns, and values from the database context.
-4. Respect the business rules and KPI definitions from the context.
-5. Return ONLY the SQL query.
-6. No markdown formatting. No explanation.
+4. Respect business rules and KPI definitions.
+5. If the plan says nested SQL is needed, use either subqueries or conditional aggregation, whichever is simpler and valid in SQLite.
+6. Return ONLY the SQL query.
+7. No markdown formatting. No explanation.
 """

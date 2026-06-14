@@ -51,18 +51,18 @@ class QuerySkeleton(BaseModel):
     )
 
 class CCDnPPlan(BaseModel):
-    from_clause: str = Field(description="FROM and JOIN clauses to use.")
-    where_clause: str = Field(
-        description="WHERE filters, including date and categorical filters.")
-    group_by_clause: str = Field(
-        description="GROUP BY clause if needed, otherwise empty.")
-    having_clause: str = Field(
-        description="HAVING clause if needed, otherwise empty.")
-    order_by_clause: str = Field(
-        description="ORDER BY clause if needed, otherwise empty.")
-    select_clause: str = Field(description="SELECT clause generated last.")
     reasoning: str = Field(
-        description="Brief explanation of the clause-by-clause plan.")
+        description="Brief reasoning about the SQL structure, including whether joins, grouping, comparison, or nested SQL are needed."
+    )
+    clause_generation_order: List[str] = Field(
+        description="The ordered clause-by-clause generation plan. Start from table selection and end with SELECT."
+    )
+    nested_sql_needed: bool = Field(
+        description="True if the question requires subqueries, CTEs, set operations, or comparison between separately computed values."
+    )
+    final_plan: str = Field(
+        description="Concise natural-language plan that will be used by the SQL generator."
+    )
 
 
 class AgentState(TypedDict):

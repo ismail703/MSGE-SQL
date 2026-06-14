@@ -173,53 +173,55 @@ def icl_generator(state: AgentState):
     return {"sql_candidate": [cleaned_sql]}
 
 def cc_dnp_generator(state: AgentState):
+    """
+    Clause-by-Clause Divide-and-Prompt generator.
+    The planner creates an ordered SQL generation plan.
+    The code LLM turns the plan into final SQL.
+    """
     print("  [INFO] Generating SQL using CC-DnP...")
 
     db_results = state.get("db_results", {})
 
     full_context = "\n\n".join([
-        db_results.get("db_schema", ""),    
+        db_results.get("db_schema", ""),
+        db_results.get("evidence", ""),
         db_results.get("values", ""),
+        db_results.get("examples", "")
     ]).strip()
+
+    print("   Full Context for CC-DnP Generation:\n", full_context)
 
     structured_qwen = qwen.with_structured_output(CCDnPPlan)
 
-    plan_obj = structured_qwen.invoke([
+    plan_obj: CCDnPPlan = structured_qwen.invoke([
         SystemMessage(content=CC_DNP_SYSTEM_PROMPT),
         HumanMessage(content=f"""
-        User question:
-        {state['question']}
+            User question:
+            {state['question']}
 
-        Retrieved database context:
-        {full_context}
-        """
-        )
-    ])
+            Retrieved database context:
+            {full_context}
+            """)
+                ])
+
+    print("   Reasoning: ", plan_obj.reasoning)
+    print("   Clause Order: ", plan_obj.clause_generation_order)
+    print("   Nested SQL Needed: ", plan_obj.nested_sql_needed)
+    print("   Final Plan:\n", plan_obj.final_plan)
 
     plan_text = f"""
-        FROM/JOIN:
-        {plan_obj.from_clause}
-
-        WHERE:
-        {plan_obj.where_clause}
-
-        GROUP BY:
-        {plan_obj.group_by_clause}
-
-        HAVING:
-        {plan_obj.having_clause}
-
-        ORDER BY:
-        {plan_obj.order_by_clause}
-
-        SELECT:
-        {plan_obj.select_clause}
-
         Reasoning:
         {plan_obj.reasoning}
-    """
 
-    print("   CC-DnP Plan:\n", plan_text)
+        Clause generation order:
+        {plan_obj.clause_generation_order}
+
+        Nested SQL needed:
+        {plan_obj.nested_sql_needed}
+
+        Final plan:
+        {plan_obj.final_plan}
+    """
 
     prompt = get_cc_dnp_sql_generation_prompt(
         plan=plan_text,
@@ -227,11 +229,10 @@ def cc_dnp_generator(state: AgentState):
         question=state["question"]
     )
 
-    response = llama.invoke([prompt])
-    cleaned_sql = response.content.replace(
-        "```sql", "").replace("```", "").strip()
+    response = llm.invoke([prompt])
+    cleaned_sql = response.content.replace("```sql", "").replace("```", "").strip()
 
-    print("Generated CC-DnP SQL:", cleaned_sql)
+    print("Generated CC-DnP SQL: ", cleaned_sql)
 
     return {"sql_candidate": [cleaned_sql]}
 
