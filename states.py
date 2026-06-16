@@ -64,6 +64,20 @@ class CCDnPPlan(BaseModel):
         description="Concise natural-language plan that will be used by the SQL generator."
     )
 
+class SQLAssessment(BaseModel):
+    sql_candidate: str = Field(description="The SQL query being assessed")
+    query_result: str = Field(description="The execution result produced by this SQL query")
+    assessment_score: int = Field(
+        ge=0, le=100,
+        description="Score from 0 to 100 reflecting how well this candidate answers the user's question"
+    )
+    reasoning: str = Field(description="Short justification for the assigned score")
+
+class SQLJudgeOutput(BaseModel):
+    assessments: list[SQLAssessment] = Field(
+        description="One assessment per SQL candidate, in the same order as provided"
+    )
+
 
 class AgentState(TypedDict):
     question: str                                    
@@ -73,6 +87,8 @@ class AgentState(TypedDict):
     formatted_result: str
     data_results: Annotated[List[str], operator.add]
     validation_results: Annotated[List[dict], operator.add]
+    final_result: str
+    formatted_result: str
 
 
 class SqlValidationState(TypedDict):

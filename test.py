@@ -24,6 +24,8 @@ try:
     print("Final Validation Results:")
     
     pprint.pprint(final_state.get('validation_results', 'No validation results generated.'))
+    print("\nFinal Result:")
+    pprint.pprint(final_state.get('final_result', 'No final result generated.'))
 
 except Exception as e:
     print(f"\n❌ Workflow failed or hit recursion limit: {e}")

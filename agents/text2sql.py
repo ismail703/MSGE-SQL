@@ -2,7 +2,7 @@ from langchain_core.messages import SystemMessage, HumanMessage
 from langgraph.graph import StateGraph, END, START 
 from langgraph.types import Send
 
-from states import AgentState, SqlValidationState, VectorDBQueries, QuerySkeleton, CCDnPPlan
+from states import AgentState, SqlValidationState, VectorDBQueries, QuerySkeleton, CCDnPPlan, SQLJudgeOutput
 from agents.sql_validation_agent import sql_validation_agent
 from prompts import (
     SKELETON_SYSTEM_PROMPT,
@@ -12,7 +12,9 @@ from prompts import (
     TEXT2SQL_FORMAT_SYSTEM_PROMPT,
     get_text2sql_format_user_prompt,
     CC_DNP_SYSTEM_PROMPT,
-    get_cc_dnp_sql_generation_prompt
+    get_cc_dnp_sql_generation_prompt,
+    SQL_SELECTION_SYSTEM_PROMPT,
+    get_sql_selection_user_prompt
 )
 from models import (
     llm, qwen, coll_schema, coll_examples, coll_evidence, coll_values, llama
@@ -146,10 +148,67 @@ def skeleton_generator(state: AgentState):
     print("   Skeleton SQL:\n", skeleton_obj.skeleton_sql)
 
     prompt = get_skeleton_sql_generation_prompt(skeleton_obj.skeleton_sql, full_context, state['question'])
-    response = llm.invoke([prompt])
+    response = llama.invoke([prompt])
     cleaned_sql = response.content.replace("```sql", "").replace("```", "").strip()
 
     return {"sql_candidate": [cleaned_sql]}
+
+def sql_selection(state: AgentState):
+    print("  [INFO] Selecting Best SQL Query...")
+
+    validation_results = state.get("validation_results", [])
+    candidates = list(validation_results)
+
+    unique_candidates = []
+    for candidate in candidates:
+        is_duplicate = False
+        for kept in unique_candidates:
+            if candidate.get("query_result") == kept.get("query_result"):
+                is_duplicate = True
+                break
+        if not is_duplicate:
+            unique_candidates.append(candidate)
+
+    if len(unique_candidates) > 1:
+        structured_llm = llm.with_structured_output(SQLJudgeOutput)
+
+        candidates_text = "\n\n".join(
+            f"Candidate {i + 1}:\nSQL Query:\n{c.get('sql_candidate', '')}\n"
+            f"Query Result:\n{c.get('query_result', '')}"
+            for i, c in enumerate(unique_candidates)
+        )
+
+        user_prompt = get_sql_selection_user_prompt(state["question"], candidates_text)
+
+        judge_output: SQLJudgeOutput = structured_llm.invoke([
+            SystemMessage(content=SQL_SELECTION_SYSTEM_PROMPT),
+            HumanMessage(content=user_prompt),
+        ])
+
+        for a in judge_output.assessments:
+            print(f"   Score: {a.assessment_score:3d} | Reasoning: {a.reasoning}")
+
+        best_score = max(a.assessment_score for a in judge_output.assessments)
+        selected = [
+            {
+                "sql_candidate": a.sql_candidate,
+                "query_result": a.query_result,
+                "assessment_score": a.assessment_score,
+            }
+            for a in judge_output.assessments
+            if a.assessment_score == best_score
+        ]
+    else:
+        selected = [
+            {
+                "sql_candidate": c.get("sql_candidate", ""),
+                "query_result": c.get("query_result", ""),
+            }
+            for c in unique_candidates
+        ]
+
+    print("   Selected:", selected)
+    return {"final_result": selected[0]["query_result"]}
 
 def icl_generator(state: AgentState):
     """
@@ -229,7 +288,7 @@ def cc_dnp_generator(state: AgentState):
         question=state["question"]
     )
 
-    response = llm.invoke([prompt])
+    response = llama.invoke([prompt])
     cleaned_sql = response.content.replace("```sql", "").replace("```", "").strip()
 
     print("Generated CC-DnP SQL: ", cleaned_sql)
@@ -272,28 +331,15 @@ def sql_validation(state: AgentState):
     ]
 
 def format_result(state: AgentState):
-    """
-    Convert raw database results into a natural language response.
-    """
     print("  [Node] Formatting Final Response")
 
-    validation_results = state.get("validation_results", [])
-    if validation_results:
-        selected_result = next(
-            (result for result in validation_results if "Error:" not in result.get("query_result", "")),
-            validation_results[-1],
-        )
-        raw_result = selected_result.get("query_result", "")
+    if "Error:" in state.get("final_result", ""):
+        answer = f"I'm sorry, I encountered an issue: {state['final_result']}"
     else:
-        raw_result = state.get("query_result", "")
-
-    if "Error:" in raw_result:
-        answer = f"I'm sorry, I encountered an issue: {raw_result}"
-    else:
-        user_question, raw_data = state["question"], raw_result
+        user_question, raw_data = state["question"], state["final_result"]
         
         user_message = get_text2sql_format_user_prompt(user_question, raw_data)
-        response = llm.invoke([
+        response = llama.invoke([
             SystemMessage(content=TEXT2SQL_FORMAT_SYSTEM_PROMPT),
             HumanMessage(content=user_message)
         ])
@@ -303,7 +349,6 @@ def format_result(state: AgentState):
 
     return {
         "formatted_result": answer,
-        "data_results": [answer]
     }      
 
 
@@ -319,7 +364,8 @@ workflow.add_node("skeleton_generator", skeleton_generator)
 workflow.add_node("icl_generator", icl_generator)
 workflow.add_node("cc_dnp_generator", cc_dnp_generator)
 workflow.add_node("sql_validation_agent", run_sql_validation_agent)
-# workflow.add_node("format_result", format_result)
+workflow.add_node("sql_selection", sql_selection)
+workflow.add_node("format_result", format_result)
 
 workflow.add_edge(START, "generate_vect_db_query")
 
@@ -333,23 +379,27 @@ workflow.add_edge("schema_db", "skeleton_generator")
 workflow.add_edge("evidence_db", "skeleton_generator")
 workflow.add_edge("cell_value_db", "skeleton_generator")
 workflow.add_conditional_edges("skeleton_generator", sql_validation, ["sql_validation_agent"])
-workflow.add_edge("sql_validation_agent", END)
+# workflow.add_edge("sql_validation_agent", END)
 
 workflow.add_edge("schema_db", "icl_generator")
 workflow.add_edge("example_db", "icl_generator")
 workflow.add_edge("evidence_db", "icl_generator")
 workflow.add_edge("cell_value_db", "icl_generator")
 workflow.add_conditional_edges("icl_generator", sql_validation, ["sql_validation_agent"])
-workflow.add_edge("sql_validation_agent", END)
+# workflow.add_edge("sql_validation_agent", END)
 
 workflow.add_edge("schema_db", "cc_dnp_generator")
 # workflow.add_edge("example_db", "cc_dnp_generator")
 # workflow.add_edge("evidence_db", "cc_dnp_generator")
 workflow.add_edge("cell_value_db", "cc_dnp_generator")
 workflow.add_conditional_edges("cc_dnp_generator", sql_validation, ["sql_validation_agent"])
-workflow.add_edge("sql_validation_agent", END)
 
-# workflow.add_edge("sql_validation_agent", "format_result")
+workflow.add_edge("sql_validation_agent", "sql_selection")
+# workflow.add_edge("sql_selection", END)
+# workflow.add_edge("sql_validation_agent", END)
+
+workflow.add_edge("sql_selection", "format_result")
+workflow.add_edge("format_result", END)
 
 # workflow.add_edge("format_result", END)
 text2sql_agent = workflow.compile()

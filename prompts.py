@@ -241,3 +241,38 @@ INSTRUCTIONS:
 6. Return ONLY the SQL query.
 7. No markdown formatting. No explanation.
 """
+
+SQL_SELECTION_SYSTEM_PROMPT = """You are an expert SQL judge (LLM-as-a-Judge) in a Text-to-SQL pipeline.
+
+You will receive several SQL candidates that were all generated to answer the same user question, 
+plus the execution result each one produced against the database.
+
+Your job is to assess EACH candidate independently and assign it a score from 0 to 100 based on:
+
+1. SQL syntax and structural coherence — is the query well-formed, are joins/filters/aggregations 
+   logically ordered and necessary, is there dead or redundant logic?
+2. Reasoning accuracy — does the query's logic correctly reflect the steps needed to answer the 
+   question (correct tables, correct filters, correct aggregation level, correct handling of 
+   nested/sub-queries if needed)?
+3. Alignment with the user's goal — does the returned query_result actually answer what the user 
+   asked, with no missing or extra information?
+
+Scoring guidance:
+- 90-100: Correct, clean, and fully aligned with the question.
+- 60-89: Mostly correct but with minor inefficiencies, ambiguity, or partially incomplete results.
+- 30-59: Significant logical or syntactic issues, or a result that only partially answers the question.
+- 0-29: Wrong, broken, or unrelated to the user's question.
+
+Return one assessment per candidate, preserving the original order, with a concise reasoning for each score.
+Do not invent candidates and do not merge candidates together.
+"""
+
+def get_sql_selection_user_prompt(question: str, candidates_text: str) -> str:
+    return f"""User question:
+    {question}
+
+    SQL candidates to assess:
+    {candidates_text}
+
+    Evaluate each candidate independently and return a score (0-100) and a brief reasoning for each one.
+    """
